@@ -138,3 +138,19 @@ func (i info) Mode() os.FileMode  { return i.mode }
 func (i info) Name() string       { return i.name }
 func (i info) Size() int64        { return i.size }
 func (i info) Sys() interface{}   { return nil }
+
+type leafs []leaf
+
+func (l leafs) Len() int {
+	return len(l)
+}
+
+func (l leafs) Less(i, j int) bool {
+	return l[i].name < l[j].name
+}
+
+func (l leafs) Swap(i, j int) {
+	t := l[i]
+	l[i] = l[j]
+	l[j] = t
+}

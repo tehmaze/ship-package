@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,8 +20,8 @@ import (
 )
 
 var (
-	DefaultDebSection  = "utils"
-	DefaultDebPriority = "optional"
+	defaultDebSection  = "utils"
+	defaultDebPriority = "optional"
 )
 
 var control = `Package: %s
@@ -57,8 +59,8 @@ func NewDeb(name, version string) *Deb {
 		Version:      version,
 		Conflicts:    make([]string, 0),
 		Depends:      make([]string, 0),
-		Section:      DefaultDebSection,
-		Priority:     DefaultDebPriority,
+		Section:      defaultDebSection,
+		Priority:     defaultDebPriority,
 		Architecture: runtime.GOARCH,
 		tree:         make(tree),
 	}
@@ -70,6 +72,18 @@ func NewDeb(name, version string) *Deb {
 
 func (d *Deb) Add(name string, mode os.FileMode, data []byte) {
 	d.tree[name] = leaf{name: name, mode: mode, data: data}
+}
+
+func (d *Deb) Name() string {
+	return fmt.Sprintf("%s_%s_%s.deb", d.Package, d.Version, d.Architecture)
+}
+
+func (d *Deb) ParseMeta(meta PackageMeta) error {
+	d.Maintainer = meta.Email
+	d.Homepage = meta.Homepage
+	d.Description = meta.Summary
+	d.LongDescription = meta.Description
+	return nil
 }
 
 func (d *Deb) control(size int64) string {
@@ -91,7 +105,7 @@ func (d *Deb) control(size int64) string {
 		d.Priority,
 		d.Homepage,
 		d.Description,
-		d.LongDescription)
+		long)
 }
 
 func (d *Deb) WriteTo(out io.Writer) error {
@@ -136,33 +150,32 @@ func (d *Deb) createDataTarball(now time.Time) ([]byte, []byte, int64, error) {
 		dirs   = make(map[string]bool)
 	)
 
-	for name, leaf := range d.tree {
-		md5buf.WriteString(fmt.Sprintf("%x  %s\n", leaf.Checksum(digest), name))
-		dir := path.Dir(name)
-		if !dirs[dir] {
-			header := tar.Header{
-				Name:     dir,
-				Mode:     0755,
-				ModTime:  now,
-				Typeflag: tar.TypeDir,
-			}
-			if err := out.WriteHeader(&header); err != nil {
-				return nil, nil, 0, fmt.Errorf("can't write header of %s to data.tar.gz: %v", dir, err)
-			}
-			dirs[dir] = true
+	leafs := leafs{}
+	for _, leaf := range d.tree {
+		leafs = append(leafs, leaf)
+	}
+	sort.Sort(leafs)
+	for _, leaf := range leafs {
+		md5buf.WriteString(fmt.Sprintf("%x  %s\n", leaf.Checksum(digest), leaf.name))
+		if err := addTarDir(now, out, path.Dir(leaf.name), dirs); err != nil {
+			return nil, nil, 0, fmt.Errorf("can't write header of %s to data.tar.gz: %v", path.Dir(leaf.name), err)
 		}
 		header := tar.Header{
-			Name:     name,
+			Name:     leaf.name,
 			Mode:     0644,
 			ModTime:  now,
+			Size:     int64(len(leaf.data)),
 			Typeflag: tar.TypeReg,
 		}
+		if filepath.IsAbs(header.Name) {
+			header.Name = "." + header.Name
+		}
 		if err := out.WriteHeader(&header); err != nil {
-			return nil, nil, 0, fmt.Errorf("can't write header of %s to data.tar.gz: %v", name, err)
+			return nil, nil, 0, fmt.Errorf("can't write header of %s to data.tar.gz: %v", leaf.name, err)
 		}
 		n, err := out.Write(leaf.data)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("can't write data of %s to data.tar.gz: %v", name, err)
+			return nil, nil, 0, fmt.Errorf("can't write data of %s to data.tar.gz: %v", leaf.name, err)
 		}
 		size += int64(n)
 	}
@@ -186,7 +199,7 @@ func (d *Deb) createControlTarball(now time.Time, size int64, md5sums []byte) ([
 	)
 
 	header := tar.Header{
-		Name:     "",
+		Name:     "./control",
 		Size:     int64(len(data)),
 		Mode:     0644,
 		ModTime:  now,
@@ -200,7 +213,7 @@ func (d *Deb) createControlTarball(now time.Time, size int64, md5sums []byte) ([
 	}
 
 	header = tar.Header{
-		Name:     "md5sums",
+		Name:     "./md5sums",
 		Size:     int64(len(md5sums)),
 		Mode:     0644,
 		ModTime:  now,
@@ -235,4 +248,35 @@ func addArFile(now time.Time, w *ar.Writer, name string, body []byte) error {
 	}
 	_, err := w.Write(body)
 	return err
+}
+
+func addTarDir(now time.Time, w *tar.Writer, name string, dirs map[string]bool) error {
+	if !dirs[name] {
+		var (
+			full   = name
+			parent = path.Dir(name)
+		)
+		if name != "/" && name != parent {
+			if !dirs[parent] {
+				if err := addTarDir(now, w, parent, dirs); err != nil {
+					return err
+				}
+			}
+			if !strings.HasSuffix(full, "/") {
+				full += "/"
+			}
+		}
+
+		header := tar.Header{
+			Name:     "." + full,
+			Mode:     0755,
+			ModTime:  now,
+			Typeflag: tar.TypeDir,
+		}
+		if err := w.WriteHeader(&header); err != nil {
+			return err
+		}
+		dirs[name] = true
+	}
+	return nil
 }
