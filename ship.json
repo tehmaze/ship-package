@@ -1,0 +1,25 @@
+{
+  "package": {
+    "ship": {
+      "meta": {
+        "email":       "pd0mz@amsat.org",
+        "homepage":    "https://github.com/pd0mz/go-ship",
+        "summary":     "Ship Linux packages",
+        "description": "Ship is a utility to build installable Linux packages from a manifest."
+      },
+      "generate": [
+        "go build -v"
+      ],
+      "version": "git-tag",
+      "ignore": [
+        ".git/*",
+        "*.swp",
+        "tmp"
+      ],
+      "manifest": {
+        "ship-package": "/usr/bin",
+        "ship.json":    "/usr/share/doc/ship-package"
+      }
+    }
+  }
+}
